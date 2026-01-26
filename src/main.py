@@ -1,8 +1,8 @@
-from core import Parser
+from parsers import IEEEParser
 
 def main(link):
-    Parser(link).parse()
+    IEEEParser(link).parse()
 
 if __name__ == '__main__':
-    main('https://www.researchgate.net/search/publication?q=Process%20Mining')
+    main('https://ieeexplore.ieee.org/search/searchresult.jsp?queryText=Process%20Mining&highlight=true&returnFacets=ALL&returnType=SEARCH&matchPubs=true&ranges=2025_2025_Year')
     # main('https://whatmyuseragent.com/')

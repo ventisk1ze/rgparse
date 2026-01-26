@@ -1,91 +1,86 @@
-import time
-import random
-from .article import Article
+import re
+import requests
+from datetime import datetime
 from selenium import webdriver
+from selenium.webdriver.common.by import By
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.common.by import By
-from selenium.webdriver import ActionChains
-from selenium.common.exceptions import NoSuchElementException
+from selenium.common.exceptions import NoSuchElementException, TimeoutException
+from selenium.webdriver.support import expected_conditions as EC
 
+DATE_PATTERN = re.compile(
+    r'\b(\d{1,2})\s+([Jj]anuary|[Ff]ebruary|[Mm]arch|[Aa]pril|[Mm]ay|[Jj]une|[Jj]uly|[Aa]ugust|[Ss]eptember|[Oo]ctober|[Nn]ovember|[Dd]ecember)\s+(\d{4})\b'
+)
 
-class Parser:
+class IEEEParser:
     def __init__(self, requested_link):
         self.driver = self.create_stealth_headless_driver()
         self.driver.get(requested_link)
-        
-        wait = WebDriverWait(self.driver, timeout=90)
-        wait.until(lambda d: 'Ray ID' not in d.page_source)
-
-        self.driver.find_element(By.ID, 'didomi-notice-agree-button').click()
-        self.human_like_delay()
 
         print('PARSER INITIALIZED')
-    
+
     def parse(self):
-        articles_container = self.driver.find_element(By.CLASS_NAME, 'js-items')
-        articles = articles_container.find_elements(By.CLASS_NAME, 'nova-legacy-o-stack__item')
-        links = [a.find_element(By.TAG_NAME, 'a').get_attribute('href') for a in articles]
-        pass
+        wait = WebDriverWait(self.driver, timeout=60)
+        wait.until(
+            EC.presence_of_all_elements_located((By.CLASS_NAME, 'List-results-items'))
+        )
+        search_results = self.driver.find_elements(By.CLASS_NAME, 'List-results-items')
+        suitable_results = (sr for sr in search_results if self.is_suitable_search_result(sr))
+        links = [sr.find_element(By.CLASS_NAME, 'fw-bold').get_attribute('href') for sr in suitable_results]
+        for link in links:
+            self.driver.get(link)
+            try:
+                date_string = ' '.join(DATE_PATTERN.findall(self.driver.page_source)[0])
+                date = datetime.strptime(date_string, '%d %B %Y').date()
+            except IndexError:
+                print('Publication date not found')
+            if date < datetime.strptime('01.10.2025', '%d.%m.%Y').date():
+                continue
 
-    def human_like_delay(self, min_seconds=2, max_seconds=8):
-        """Randomized delay between actions"""
-        delay = random.uniform(min_seconds, max_seconds)
+            pdf_button = self.driver.find_element(By.CLASS_NAME, 'xpl-btn-pdf')
+            pdf_link = pdf_button.get_attribute('href')
+
+            pdf_button.click()
+            if 'denied' in self.driver.current_url:
+                self.driver.get(pdf_link)
+
+            wait.until(EC.presence_of_all_elements_located((By.TAG_NAME, 'iframe')))
+            
+            if 'denied' in self.driver.current_url:
+                print('Access to article denied')
+                return
+
+            wait.until(EC.presence_of_all_elements_located((By.TAG_NAME, 'iframe')))
+            frames = self.driver.find_elements(By.TAG_NAME, 'iframe')
+            print(len(frames))
+            for element in frames:
+                print('IFRAME')
+                self.driver.switch_to.frame(element)
+                try:
+                    wait.until(EC.presence_of_all_elements_located((By.TAG_NAME, 'iframe')))
+                    print('found inner iframe')
+                    self.driver.switch_to.frame(
+                        self.driver.find_element(By.TAG_NAME, 'iframe')
+                    )
+                    wait.until(EC.presence_of_all_elements_located((By.ID, 'save')))
+                except TimeoutException:
+                    print('TIMEOUT')
+                    self.driver.switch_to.default_content()
+                    continue
+
+                print(element.find_element(By.ID, 'save'))
+                break
         
-        # Add micro-delays within the wait
-        steps = random.randint(3, 8)
-        step_delay = delay / steps
-        
-        for i in range(steps):
-            time.sleep(step_delay)
-            # Simulate occasional mouse movement
-            if random.random() > 0.7:
-                self.driver.execute_script(f"""
-                    window.dispatchEvent(new MouseEvent('mousemove', {{
-                        clientX: {random.randint(0, 1000)},
-                        clientY: {random.randint(0, 800)}
-                    }}));
-                """)
     
-    
-    def scroll(self, element):
-        ActionChains(self.driver).scroll_to_element(element).perform()
-    
-    def move_mouse(self, element):
-        self.driver.execute_script(f"""
-            window.dispatchEvent(new MouseEvent('mousemove', {{
-                clientX: {element.location['x']},
-                clientY: {element.location['y']}
-            }}));
-        """)
-    
-    def next_page(self):
-        pagination = self.driver.find_element(By.CLASS_NAME, 'pager-container')
-        next_page_button = pagination.find_elements(By.CLASS_NAME, 'nova-legacy-c-button-group__item')[-1]
+    @staticmethod
+    def is_suitable_search_result(element):
         try:
-            next_page_button.find_element(By.TAG_NAME, 'button')
-            return 'END'
+            element.find_element(By.CLASS_NAME, 'icon-access-open-access')
         except NoSuchElementException:
-            pass
-        ActionChains(self.driver).scroll_to_element(next_page_button).perform()
-        next_page_button.find_element(By.TAG_NAME, 'a').click()
-        self.driver.execute_script(f"""
-                    window.dispatchEvent(new MouseEvent('mousemove', {{
-                        clientX: {random.randint(0, 1000)},
-                        clientY: {random.randint(0, 800)}
-                    }}));
-                """)
+            return False
+        link = element.find_element(By.CLASS_NAME, 'fw-bold')
+        return 'Process Mining' in link.text
     
-    @staticmethod
-    def get_link(div):
-        return div.find_element(By.CLASS_NAME, 'nova-legacy-e-link')
-
-    @staticmethod
-    def get_date(div):
-        e_list = div.find_element(By.TAG_NAME, 'ul')
-        date_text = e_list.find_element(By.TAG_NAME, 'li')
-        print(date_text.text)
-
     @staticmethod
     def create_stealth_headless_driver():
         options = Options()
@@ -124,6 +119,9 @@ class Parser:
         
         # Set preferences
         prefs = {
+            "download.default_directory": './downloads',
+            "download.prompt_for_download": False,  # Disable download prompt
+            "download.directory_upgrade": True,
             "profile.default_content_setting_values.notifications": 2,
             "credentials_enable_service": False,
             "profile.password_manager_enabled": False,
