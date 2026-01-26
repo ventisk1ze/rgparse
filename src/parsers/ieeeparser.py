@@ -1,11 +1,12 @@
 import re
-import requests
+import os
+import time
 from datetime import datetime
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.support.ui import WebDriverWait
-from selenium.common.exceptions import NoSuchElementException, TimeoutException
+from selenium.common.exceptions import NoSuchElementException, TimeoutException, NoSuchShadowRootException
 from selenium.webdriver.support import expected_conditions as EC
 
 DATE_PATTERN = re.compile(
@@ -14,6 +15,9 @@ DATE_PATTERN = re.compile(
 
 class IEEEParser:
     def __init__(self, requested_link):
+        self.download_path = os.path.join(os.getcwd(), 'downloads')
+        os.makedirs(self.download_path, exist_ok=True)
+
         self.driver = self.create_stealth_headless_driver()
         self.driver.get(requested_link)
 
@@ -45,32 +49,19 @@ class IEEEParser:
                 self.driver.get(pdf_link)
 
             wait.until(EC.presence_of_all_elements_located((By.TAG_NAME, 'iframe')))
-            
-            if 'denied' in self.driver.current_url:
-                print('Access to article denied')
-                return
-
-            wait.until(EC.presence_of_all_elements_located((By.TAG_NAME, 'iframe')))
             frames = self.driver.find_elements(By.TAG_NAME, 'iframe')
-            print(len(frames))
-            for element in frames:
-                print('IFRAME')
-                self.driver.switch_to.frame(element)
-                try:
-                    wait.until(EC.presence_of_all_elements_located((By.TAG_NAME, 'iframe')))
-                    print('found inner iframe')
-                    self.driver.switch_to.frame(
-                        self.driver.find_element(By.TAG_NAME, 'iframe')
-                    )
-                    wait.until(EC.presence_of_all_elements_located((By.ID, 'save')))
-                except TimeoutException:
-                    print('TIMEOUT')
-                    self.driver.switch_to.default_content()
-                    continue
-
-                print(element.find_element(By.ID, 'save'))
-                break
+            for frame in frames:
+                if 'iframe src' in frame.get_attribute('outerHTML'):
+                    direct_link = frame.get_attribute('src')
+                    self.download(direct_link)
         
+    def download(self, link):
+        self.driver.get(link)
+        time.sleep(2)
+        files = os.listdir(self.download_path)
+        while any(f.endswith('.crdownload') for f in files):
+            time.sleep(1)
+            files = os.listdir(self.download_path)
     
     @staticmethod
     def is_suitable_search_result(element):
@@ -81,8 +72,7 @@ class IEEEParser:
         link = element.find_element(By.CLASS_NAME, 'fw-bold')
         return 'Process Mining' in link.text
     
-    @staticmethod
-    def create_stealth_headless_driver():
+    def create_stealth_headless_driver(self):
         options = Options()
         
         # Use new headless mode
@@ -116,10 +106,14 @@ class IEEEParser:
         # Disable logging
         options.add_argument('--log-level=3')
         options.add_argument('--silent')
+
+        options.add_argument('--disable-pdf-viewer')
+        options.add_argument('--disable-features=ChromePDFViewer')
+        
         
         # Set preferences
         prefs = {
-            "download.default_directory": './downloads',
+            "download.default_directory": self.download_path,
             "download.prompt_for_download": False,  # Disable download prompt
             "download.directory_upgrade": True,
             "profile.default_content_setting_values.notifications": 2,
@@ -127,7 +121,10 @@ class IEEEParser:
             "profile.password_manager_enabled": False,
             "webrtc.ip_handling_policy": "disable_non_proxied_udp",
             "webrtc.multiple_routes_enabled": False,
-            "webrtc.nonproxied_udp_enabled": False
+            "webrtc.nonproxied_udp_enabled": False,
+            "plugins.plugins_disabled": ["Chrome PDF Viewer"], # Disable Chrome's PDF Viewer , 
+            "download.extensions_to_open": "application/pdf",
+            "plugins.always_open_pdf_externally": True, 
         }
         options.add_experimental_option("prefs", prefs)
         
