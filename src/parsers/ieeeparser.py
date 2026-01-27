@@ -20,41 +20,74 @@ class IEEEParser:
 
         self.driver = self.create_stealth_headless_driver()
         self.driver.get(requested_link)
+        self.requested_link = requested_link
 
         print('PARSER INITIALIZED')
 
+    @staticmethod
+    def find_link(element):
+        try:
+            return element.find_element(By.CLASS_NAME, 'fw-bold').get_attribute('href')
+        except NoSuchElementException:
+            return False
+
+    
     def parse(self):
         wait = WebDriverWait(self.driver, timeout=60)
         wait.until(
-            EC.presence_of_all_elements_located((By.CLASS_NAME, 'List-results-items'))
+            EC.presence_of_all_elements_located((By.CLASS_NAME, 'pagination-bar'))
         )
-        search_results = self.driver.find_elements(By.CLASS_NAME, 'List-results-items')
-        suitable_results = (sr for sr in search_results if self.is_suitable_search_result(sr))
-        links = [sr.find_element(By.CLASS_NAME, 'fw-bold').get_attribute('href') for sr in suitable_results]
-        for link in links:
-            self.driver.get(link)
-            try:
-                date_string = ' '.join(DATE_PATTERN.findall(self.driver.page_source)[0])
-                date = datetime.strptime(date_string, '%d %B %Y').date()
-            except IndexError:
-                print('Publication date not found')
-            if date < datetime.strptime('01.10.2025', '%d.%m.%Y').date():
-                continue
+        pagination_bar = self.driver.find_element(By.CLASS_NAME, 'pagination-bar')
+        pagination_links = pagination_bar.find_elements(By.TAG_NAME, 'button')[:-1]
+        for i in range(len(pagination_links)):
+            start = datetime.now()
+            if i != 0:
+                time.sleep(5)
+                pagination_bar = self.driver.find_element(By.CLASS_NAME, 'pagination-bar')
+                pagination_bar.find_elements(By.TAG_NAME, 'button')[i].click()
+            
+            print(f'Processing page {i+1}')
+            wait.until(
+                EC.presence_of_all_elements_located((By.CLASS_NAME, 'List-results-items'))
+            )
+            search_results = self.driver.find_elements(By.CLASS_NAME, 'List-results-items')
+            suitable_results = (sr for sr in search_results if self.is_suitable_search_result(sr))
+            links = [self.find_link(sr) for sr in suitable_results]
+            for link in links:
+                if not link:
+                    continue
+                self.driver.get(link)
+                try:
+                    date_string = ' '.join(DATE_PATTERN.findall(self.driver.page_source)[0])
+                    date = datetime.strptime(date_string, '%d %B %Y').date()
+                except IndexError:
+                    print('Publication date not found')
+                if date < datetime.strptime('01.10.2025', '%d.%m.%Y').date():
+                    continue
 
-            pdf_button = self.driver.find_element(By.CLASS_NAME, 'xpl-btn-pdf')
-            pdf_link = pdf_button.get_attribute('href')
+                pdf_button = self.driver.find_element(By.CLASS_NAME, 'xpl-btn-pdf')
+                pdf_link = pdf_button.get_attribute('href')
 
-            pdf_button.click()
-            if 'denied' in self.driver.current_url:
-                self.driver.get(pdf_link)
+                pdf_button.click()
+                if 'denied' in self.driver.current_url:
+                    self.driver.get(pdf_link)
 
-            wait.until(EC.presence_of_all_elements_located((By.TAG_NAME, 'iframe')))
-            frames = self.driver.find_elements(By.TAG_NAME, 'iframe')
-            for frame in frames:
-                if 'iframe src' in frame.get_attribute('outerHTML'):
-                    direct_link = frame.get_attribute('src')
-                    self.download(direct_link)
+                wait.until(EC.presence_of_all_elements_located((By.TAG_NAME, 'iframe')))
+                frames = self.driver.find_elements(By.TAG_NAME, 'iframe')
+                for frame in frames:
+                    if 'iframe src' in frame.get_attribute('outerHTML'):
+                        direct_link = frame.get_attribute('src')
+                        self.download(direct_link)
+            print(f'Page {i+1} processed in {datetime.now() - start}')
+            self.driver.get(self.requested_link)            
         
+    def save_to_html(self):
+        """
+        for debug purposes only
+        """
+        with open('page.html', 'w', encoding='utf8') as f:
+            f.write(self.driver.page_source)
+    
     def download(self, link):
         self.driver.get(link)
         time.sleep(2)
@@ -67,10 +100,11 @@ class IEEEParser:
     def is_suitable_search_result(element):
         try:
             element.find_element(By.CLASS_NAME, 'icon-access-open-access')
+            # link = element.find_element(By.CLASS_NAME, 'fw-bold')
         except NoSuchElementException:
             return False
-        link = element.find_element(By.CLASS_NAME, 'fw-bold')
-        return 'Process Mining' in link.text
+        # return bool(re.findall('Process Mining|Event Log', link.text, re.IGNORECASE))
+        return True
     
     def create_stealth_headless_driver(self):
         options = Options()
